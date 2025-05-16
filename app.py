@@ -22,6 +22,17 @@ Sube una imagen y el modelo te dirá qué Pokémon es y con qué confianza lo ha
 # Ruta al modelo pre-entrenado
 MODEL_PATH = "models/pokemon_resnet_model.pth"
 
+def get_idx_to_class_from_data_dir(data_dir):
+    """Reconstruye el mapeo idx_to_class leyendo los nombres de las carpetas en el directorio de datos."""
+    if not os.path.exists(data_dir):
+        st.warning(f"No se encontró el directorio de datos: {data_dir}")
+        return {}
+    classes = sorted([d for d in os.listdir(data_dir) if os.path.isdir(os.path.join(data_dir, d))])
+    return {i: c for i, c in enumerate(classes)}
+
+# Cambia este path si tu dataset está en otro lugar
+DATA_DIR = "data"
+
 def load_model():
     """Carga el modelo pre-entrenado"""
     if not os.path.exists(MODEL_PATH):
@@ -29,11 +40,36 @@ def load_model():
         return None
     
     try:
-        checkpoint = torch.load(MODEL_PATH, map_location='mps')
-        model = PokemonResNet(len(checkpoint['idx_to_class']))
-        model.load_state_dict(checkpoint['model_state_dict'])
-        model.eval()
-        return model, checkpoint['idx_to_class'], checkpoint['transform']
+        # Cargar el modelo completo con weights_only=False
+        loaded_data = torch.load(MODEL_PATH, map_location='cpu', weights_only=False)
+        
+        # Verificar si el objeto cargado es el modelo completo
+        if isinstance(loaded_data, PokemonResNet):
+            model = loaded_data
+            model.eval()
+            idx_to_class = get_idx_to_class_from_data_dir(DATA_DIR)
+            return model, idx_to_class, resnet_transform
+        
+        # Si no es el modelo completo, verificar si es un diccionario
+        if isinstance(loaded_data, dict):
+            # Si es un diccionario, extraer el estado del modelo y las clases
+            model_state = loaded_data.get('model_state_dict', loaded_data)
+            idx_to_class = loaded_data.get('idx_to_class', {})
+            
+            # Si no hay mapeo, reconstruirlo
+            if not idx_to_class:
+                idx_to_class = get_idx_to_class_from_data_dir(DATA_DIR)
+            
+            # Crear el modelo
+            model = PokemonResNet(len(idx_to_class) if idx_to_class else 151)
+            model.load_state_dict(model_state)
+            model.eval()
+            
+            return model, idx_to_class, resnet_transform
+        else:
+            st.error("Formato de modelo no reconocido")
+            return None
+            
     except Exception as e:
         st.error(f"Error al cargar el modelo: {str(e)}")
         return None
@@ -88,7 +124,14 @@ def main():
                     # Mostrar resultados
                     st.success(f"¡Predicción exitosa!")
                     st.markdown(f"### Resultados:")
-                    st.markdown(f"**Pokémon identificado:** {idx_to_class[predicted_class]}")
+                    
+                    # Manejar el caso donde no tenemos mapeo de clases
+                    if idx_to_class:
+                        pokemon_name = idx_to_class.get(predicted_class, f"Pokémon #{predicted_class}")
+                    else:
+                        pokemon_name = f"Pokémon #{predicted_class}"
+                    
+                    st.markdown(f"**Pokémon identificado:** {pokemon_name}")
                     st.markdown(f"**Confianza:** {confidence:.2%}")
                     
                     # Mostrar barra de progreso para la confianza
